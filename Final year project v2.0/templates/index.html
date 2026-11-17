@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>City General Hospital — Emergency Triage</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="logo">+</span>
+        <div>
+          <strong>City General</strong>
+          <small>Emergency triage</small>
+        </div>
+      </div>
+      <nav>
+        <a class="{{ 'active' if view == 'intake' }}" href="/?view=intake">New patient</a>
+        <a class="{{ 'active' if view == 'review' }}" href="/?view=review">
+          Nurse review
+          {% if data.counts.review %}<span class="badge">{{ data.counts.review }}</span>{% endif %}
+        </a>
+        <a class="{{ 'active' if view == 'waitlist' }}" href="/?view=waitlist">Waitlist</a>
+        <a class="{{ 'active' if view == 'doctors' }}" href="/?view=doctors">Doctors</a>
+        <a class="{{ 'active' if view == 'records' }}" href="/?view=records">Records</a>
+        {% if is_admin %}
+        <a class="{{ 'active' if view == 'settings' }}" href="/?view=settings">Database</a>
+        {% endif %}
+      </nav>
+      <div class="side-user">
+        {% if user %}
+        <strong>{{ user.full_name or user.username }}</strong>
+        <small>{{ user.role }}</small>
+        <a href="{{ url_for('logout') }}">Sign out</a>
+        {% else %}
+        <a class="btn small primary" href="{{ url_for('login') }}">Staff login</a>
+        {% endif %}
+      </div>
+      <div class="side-stats">
+        <div><span>{{ data.counts.waiting }}</span> waiting</div>
+        <div><span>{{ data.counts.in_care }}</span> in care</div>
+        <div><span>{{ data.counts.discharged }}</span> discharged</div>
+        <div><span>{{ data.counts.free_doctors }}</span> doctors free</div>
+      </div>
+    </aside>
+
+    <main>
+      {% if flash %}
+      <div class="toast {{ kind }}">{{ flash }}</div>
+      {% endif %}
+
+      {% if view == 'intake' %}
+      <header class="page-head">
+        <h1>Register a patient</h1>
+        <p>Fill in what you know. The system will suggest a treatment priority. A nurse still has to confirm it.</p>
+      </header>
+      <form class="card form" method="post" action="/intake">
+        <h2>Who is the patient?</h2>
+        <div class="grid-3">
+          <label>Full name
+            <input name="name" required placeholder="e.g. Anita Desai" />
+          </label>
+          <label>Age
+            <input name="age" type="number" min="0" max="120" required />
+          </label>
+          <label>Sex
+            <select name="sex">
+              <option>Female</option>
+              <option>Male</option>
+              <option>Other</option>
+              <option>Not specified</option>
+            </select>
+          </label>
+          <label>Phone
+            <input name="phone" placeholder="Optional" />
+          </label>
+          <label>How did they arrive?
+            <select name="arrival">
+              <option>Walk-in</option>
+              <option>Ambulance</option>
+              <option>Referred</option>
+            </select>
+          </label>
+          <label>Alertness
+            <select name="consciousness">
+              <option>Alert</option>
+              <option>Confused</option>
+              <option>Unresponsive</option>
+            </select>
+          </label>
+        </div>
+
+        <h2>Symptoms</h2>
+        <p class="hint">Tick everything that applies. You can also describe more below.</p>
+        <div class="chips">
+          {% for s in symptoms %}
+          <label class="chip"><input type="checkbox" name="symptoms" value="{{ s }}" /> {{ s }}</label>
+          {% endfor %}
+        </div>
+        <label>How long have symptoms lasted?
+          <input name="duration" placeholder="e.g. 2 hours, since last night" />
+        </label>
+        <label>Pain (0 = none, 10 = worst)
+          <input name="pain" type="range" min="0" max="10" value="3" oninput="this.nextElementSibling.textContent = this.value" />
+          <span class="pain-val">3</span>
+        </label>
+        <label>Anything else we should know?
+          <textarea name="notes" rows="3" placeholder="Describe the problem in simple words"></textarea>
+        </label>
+        <label class="inline"><input type="checkbox" name="pregnancy" /> Patient is pregnant</label>
+
+        <h2>Vitals <small>(skip any you do not have)</small></h2>
+        <div class="grid-3">
+          <label>Heart rate (bpm)<input name="heart_rate" type="number" min="20" max="250" /></label>
+          <label>Blood pressure (top)<input name="systolic_bp" type="number" min="50" max="260" placeholder="Systolic" /></label>
+          <label>Blood pressure (bottom)<input name="diastolic_bp" type="number" min="30" max="160" placeholder="Diastolic" /></label>
+          <label>Temperature (°C)<input name="temperature" type="number" step="0.1" min="30" max="45" /></label>
+          <label>Oxygen SpO2 (%)<input name="spo2" type="number" min="50" max="100" /></label>
+          <label>Breaths per minute<input name="resp_rate" type="number" min="4" max="60" /></label>
+        </div>
+
+        <h2>Medical background</h2>
+        <div class="grid-2">
+          <label>Allergies<textarea name="allergies" rows="2" placeholder="None"></textarea></label>
+          <label>Past conditions / medicines<textarea name="history" rows="2" placeholder="None"></textarea></label>
+        </div>
+        <button type="submit" class="btn primary">Run AI triage</button>
+      </form>
+      {% endif %}
+
+      {% if view == 'review' %}
+      <header class="page-head">
+        <h1>Nurse review</h1>
+        <p>AI suggests a priority. Only a signed-in nurse or admin can confirm it or override it.</p>
+      </header>
+      {% if not data.pending %}
+      <div class="empty card">No patients waiting for review. Register someone from <a href="/?view=intake">New patient</a>.</div>
+      {% endif %}
+      {% for p in data.pending %}
+      <article class="card patient">
+        <div class="patient-top">
+          <div>
+            <h2>{{ p.name }} <span class="id">{{ p.id }}</span></h2>
+            <p class="meta">{{ p.age }} yrs · {{ p.sex }} · {{ p.arrival }} · Alertness: {{ p.consciousness }}</p>
+          </div>
+          <span class="prio p{{ p.ai_priority }}">AI: {{ p.priority_label }}</span>
+        </div>
+        <p class="summary">{{ p.ai_summary }}</p>
+        <ul class="reasons">
+          {% for r in p.ai_reasons %}<li>{{ r }}</li>{% endfor %}
+        </ul>
+        <div class="facts">
+          <div><strong>Symptoms</strong>{{ p.symptoms | join(', ') if p.symptoms else 'Not listed' }}</div>
+          <div><strong>Pain</strong>{{ p.pain }}/10 · {{ p.duration or 'duration unknown' }}</div>
+          <div><strong>Vitals</strong>HR {{ p.heart_rate or '—' }} · BP {{ p.systolic_bp or '—' }}/{{ p.diastolic_bp or '—' }} · Temp {{ p.temperature or '—' }} · SpO2 {{ p.spo2 or '—' }}% · RR {{ p.resp_rate or '—' }}</div>
+          <div><strong>Allergies</strong>{{ p.allergies }} · <strong>History</strong> {{ p.history }}</div>
+          <div><strong>Suggested doctor type</strong>{{ p.specialty }}</div>
+        </div>
+        <form class="review-form" method="post" action="/review/{{ p.id }}">
+          <label>Final priority
+            <select name="priority">
+              {% for n, meta in priorities.items() %}
+              <option value="{{ n }}" {% if n == p.ai_priority %}selected{% endif %}>{{ n }} — {{ meta.label }} ({{ meta.wait }})</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label>Review notes
+            <input name="review_notes" placeholder="Why you agree or override the AI suggestion" />
+          </label>
+          <p class="hint">Changing the priority from the AI suggestion is an override. This is logged under {{ user.username }}.</p>
+          <div class="actions">
+            <button class="btn primary" name="action" value="approve" type="submit">Approve and add to waitlist</button>
+            <button class="btn ghost" name="action" value="reject" type="submit">Do not add</button>
+          </div>
+        </form>
+      </article>
+      {% endfor %}
+      {% endif %}
+
+      {% if view == 'waitlist' %}
+      <header class="page-head">
+        <h1>Waitlist</h1>
+        <p>Highest priority is treated first. Critical is 1, Minimal is 5.</p>
+      </header>
+
+      <div class="card add-box">
+        <h2>Add someone back</h2>
+        {% if data.addable %}
+        <p class="hint">Patients who were removed or not approved can be put on the waitlist again.</p>
+        <div class="stack">
+          {% for p in data.addable %}
+          <form method="post" action="/waitlist/add/{{ p.id }}" class="row-form">
+            <span>{{ p.name }} · {{ p.priority_label }} · {{ p.id }}</span>
+            <button class="btn small" type="submit">Add to waitlist</button>
+          </form>
+          {% endfor %}
+        </div>
+        {% else %}
+        <p class="hint">Nobody to add back. Use <a href="/?view=intake">New patient</a> to register someone new.</p>
+        {% endif %}
+      </div>
+
+      <h2 class="block-title">Waiting to be seen</h2>
+      {% if not data.waiting %}
+      <div class="empty card">The waitlist is empty.</div>
+      {% else %}
+      <div class="table wrap card">
+        <table>
+          <thead>
+            <tr>
+              <th>Priority</th>
+              <th>Patient</th>
+              <th>Assigned doctor</th>
+              <th>Seen from</th>
+              <th>Doctor free at</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for p in data.waiting %}
+            <tr>
+              <td><span class="prio p{{ p.priority }}">{{ p.priority }} {{ p.priority_label }}</span></td>
+              <td>
+                <strong>{{ p.name }}</strong>
+                <small>{{ p.age }} yrs · {{ p.specialty }} · {{ p.id }}</small>
+              </td>
+              <td>{{ p.doctor_name or 'Unassigned' }}<small>{{ p.room or '' }}</small></td>
+              <td>{{ p.care_start or 'When a doctor is free' }}</td>
+              <td>{{ p.free_at or '—' }}</td>
+              <td>
+                <form method="post" action="/remove/{{ p.id }}">
+                  <button class="btn small danger" type="submit">Remove</button>
+                </form>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% endif %}
+
+      <h2 class="block-title">Currently with a doctor</h2>
+      {% if not data.in_care %}
+      <div class="empty card">No one is in care right now.</div>
+      {% else %}
+      <div class="table wrap card">
+        <table>
+          <thead>
+            <tr>
+              <th>Priority</th>
+              <th>Patient</th>
+              <th>Doctor</th>
+              <th>Expected free</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for p in data.in_care %}
+            <tr>
+              <td><span class="prio p{{ p.priority }}">{{ p.priority }} {{ p.priority_label }}</span></td>
+              <td>
+                <strong>{{ p.name }}</strong>
+                <small>{{ p.age }} yrs · {{ p.specialty }} · {{ p.id }}</small>
+              </td>
+              <td>{{ p.doctor_name }}<small>{{ p.room }}</small></td>
+              <td>{{ p.free_at }}</td>
+              <td class="row-btns">
+                <form method="post" action="/complete/{{ p.id }}"><button class="btn small" type="submit">Done</button></form>
+                <form method="post" action="/remove/{{ p.id }}"><button class="btn small danger" type="submit">Remove</button></form>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% endif %}
+      {% endif %}
+
+      {% if view == 'records' %}
+      <header class="page-head">
+        <h1>Patient records</h1>
+        <p>People currently being treated and patients who have been discharged. Download as CSV or Excel.</p>
+      </header>
+      <div class="export-bar card">
+        <div>
+          <strong>Export all records</strong>
+          <p class="hint">Includes in-treatment and discharged patients.</p>
+        </div>
+        <div class="actions">
+          <a class="btn" href="{{ url_for('export_records', kind='all', fmt='csv') }}">CSV</a>
+          <a class="btn primary" href="{{ url_for('export_records', kind='all', fmt='xlsx') }}">Excel</a>
+        </div>
+      </div>
+
+      <div class="block-head">
+        <h2 class="block-title">Currently being treated</h2>
+        <div class="actions">
+          <a class="btn small" href="{{ url_for('export_records', kind='in_care', fmt='csv') }}">CSV</a>
+          <a class="btn small" href="{{ url_for('export_records', kind='in_care', fmt='xlsx') }}">Excel</a>
+        </div>
+      </div>
+      {% if not data.in_care %}
+      <div class="empty card">No one is in treatment right now.</div>
+      {% else %}
+      <div class="table wrap card">
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Patient</th>
+              <th>Priority</th>
+              <th>Doctor</th>
+              <th>Started</th>
+              <th>Expected free</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for p in data.in_care %}
+            <tr>
+              <td>{{ p.id }}</td>
+              <td>
+                <strong>{{ p.name }}</strong>
+                <small>{{ p.age }} yrs · {{ p.sex }} · {{ p.phone or 'no phone' }}</small>
+              </td>
+              <td><span class="prio p{{ p.priority }}">{{ p.priority }} {{ p.priority_label }}</span></td>
+              <td>{{ p.doctor_name or '—' }}<small>{{ p.room or '' }}</small></td>
+              <td>{{ p.care_start or '—' }}</td>
+              <td>{{ p.free_at or '—' }}</td>
+              <td>
+                <form method="post" action="/complete/{{ p.id }}">
+                  <button class="btn small" type="submit">Discharge</button>
+                </form>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% endif %}
+
+      <div class="block-head">
+        <h2 class="block-title">Discharged</h2>
+        <div class="actions">
+          <a class="btn small" href="{{ url_for('export_records', kind='discharged', fmt='csv') }}">CSV</a>
+          <a class="btn small" href="{{ url_for('export_records', kind='discharged', fmt='xlsx') }}">Excel</a>
+        </div>
+      </div>
+      {% if not data.discharged %}
+      <div class="empty card">No discharged patients yet.</div>
+      {% else %}
+      <div class="table wrap card">
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Patient</th>
+              <th>Priority</th>
+              <th>Doctor</th>
+              <th>Registered</th>
+              <th>Discharged</th>
+              <th>Reviewed by</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for p in data.discharged %}
+            <tr>
+              <td>{{ p.id }}</td>
+              <td>
+                <strong>{{ p.name }}</strong>
+                <small>{{ p.age }} yrs · {{ p.sex }} · {{ p.symptoms | join(', ') if p.symptoms else '—' }}</small>
+              </td>
+              <td><span class="prio p{{ p.priority }}">{{ p.priority }} {{ p.priority_label }}</span></td>
+              <td>{{ p.doctor_name or '—' }}<small>{{ p.room or '' }}</small></td>
+              <td>{{ p.created_at or '—' }}</td>
+              <td>{{ p.completed_at or '—' }}</td>
+              <td>{{ p.reviewed_by or '—' }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% endif %}
+      {% endif %}
+
+      {% if view == 'doctors' %}
+      <header class="page-head">
+        <h1>Doctors</h1>
+        <p>Add your own doctors. Booked doctors stay with their patient until the visit is marked done.</p>
+      </header>
+      <form class="card form" method="post" action="/doctors/add">
+        <h2>Add a doctor</h2>
+        <div class="grid-3">
+          <label>Name
+            <input name="name" required placeholder="e.g. Dr. Asha Rao" />
+          </label>
+          <label>Specialty
+            <input name="specialty" list="specialty-list" required placeholder="Emergency" />
+            <datalist id="specialty-list">
+              {% for s in specialties %}
+              <option value="{{ s }}"></option>
+              {% endfor %}
+            </datalist>
+          </label>
+          <label>Room
+            <input name="room" placeholder="e.g. ER-3" />
+          </label>
+        </div>
+        <button class="btn primary" type="submit">Save doctor</button>
+      </form>
+      <div class="docs">
+        {% for d in data.doctors %}
+        <article class="card doc {{ 'busy' if d.booked else 'free' }}">
+          <div class="doc-top">
+            <h2>{{ d.name }}</h2>
+            <span class="status">{{ 'Booked' if d.booked else 'Free' }}</span>
+          </div>
+          <p>{{ d.specialty }} · Room {{ d.room }}</p>
+          {% if d.booked %}
+          <p class="eta">Free at <strong>{{ d.free_at }}</strong></p>
+          {% set pt = namespace(found=None) %}
+          {% for p in data.in_care + data.waiting %}
+            {% if p.id == d.patient_id %}{% set pt.found = p %}{% endif %}
+          {% endfor %}
+          {% if pt.found %}
+          <p class="with">With {{ pt.found.name }} ({{ pt.found.priority_label }})</p>
+          <form method="post" action="/complete/{{ d.patient_id }}">
+            <button class="btn small" type="submit">Mark free now</button>
+          </form>
+          {% endif %}
+          {% else %}
+          <p class="eta">Available now</p>
+          {% endif %}
+          <form method="post" action="/doctors/remove/{{ d.id }}" onsubmit="return confirm('Remove this doctor from the list?')">
+            <button class="btn small danger" type="submit">Remove</button>
+          </form>
+        </article>
+        {% endfor %}
+      </div>
+      {% endif %}
+
+      {% if view == 'settings' %}
+      <header class="page-head">
+        <h1>Connect a database</h1>
+        <p>All patients, doctors, and staff accounts are saved in the connected database. Admin login is required to change this.</p>
+      </header>
+      <div class="card">
+        <h2>Current connection</h2>
+        <p class="mono">{{ db_url }}</p>
+      </div>
+      <form class="card form" method="post" action="/settings/database">
+        <h2>Personal database</h2>
+        <p class="hint">Paste a SQLAlchemy URL. Leave the local SQLite file if you want everything stored on this computer.</p>
+        <label>Database URL
+          <input name="database_url" required value="{{ db_url }}" placeholder="sqlite:///C:/path/hospital.db" />
+        </label>
+        <ul class="hint-list">
+          <li>Local file: <code>sqlite:///C:/Users/ASUS/hospital.db</code></li>
+          <li>PostgreSQL: <code>postgresql://user:password@localhost:5432/hospital</code></li>
+          <li>MySQL: <code>mysql+pymysql://user:password@localhost:3306/hospital</code></li>
+        </ul>
+        <label class="inline"><input type="checkbox" name="copy_data" checked /> Copy existing patients, doctors, and logins into the new database</label>
+        <button class="btn primary" type="submit">Connect and save data here</button>
+      </form>
+      {% endif %}
+    </main>
+  </div>
+</body>
+</html>
